@@ -1,0 +1,95 @@
+import cv2
+import mediapipe as mp
+import numpy as np
+import math
+from ctypes import cast, POINTER
+from comtypes import CLSCTX_ALL
+from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+
+# MediaPipe Hands modelini başlatma
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands()
+
+# Kamera başlatma
+cap = cv2.VideoCapture(0)
+
+# Ses kontrolü için gerekli nesneleri oluşturun
+devices = AudioUtilities.GetSpeakers()
+interface = devices.Activate(
+    IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+volume = cast(interface, POINTER(IAudioEndpointVolume))
+
+# Başlangıç ses seviyesi
+current_volume = 0.5
+
+# Yumruk tanıma için değişkenler
+last_fist_state = False  # Son yumruk durumu
+fist_count = 0          # Ardışık yumruk sayısı
+
+while True:
+    success, img = cap.read()
+
+    # Görüntüyü işleme
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    results = hands.process(img_rgb)
+
+    if results.multi_hand_landmarks:
+        for hand_landmarks in results.multi_hand_landmarks:
+            # Elin uç koordinatlarına erişim
+            landmarks = hand_landmarks.landmark
+
+            # İstediğiniz işlemleri burada yapabilirsiniz
+            # Örneğin, eli çevreleyen bir dörtgen çizebilirsiniz.
+            landmark_coords = [(int(landmark.x * img.shape[1]), int(landmark.y * img.shape[0])) for landmark in landmarks]
+            landmark_coords_np = np.array(landmark_coords)
+            x, y, w, h = cv2.boundingRect(landmark_coords_np)
+            cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+            # El uzunluğunu hesaplama
+            length = math.hypot(w, h)
+
+            # Yumruk hareketini tanıma
+            if length < 50:
+                if not last_fist_state:
+                    fist_count += 1
+                last_fist_state = True
+            else:
+                last_fist_state = False
+
+            # Ardışık yumruk sayısı 5 ise sesi kapat
+            if fist_count >= 5:
+                current_volume = 0.0
+                # Ses seviyesini kapatın (0 olarak ayarlayın)
+                volume.SetMasterVolumeLevelScalar(0.0, None)
+            else:
+                # Yumuşak geçiş yaparak ses seviyesini ayarlama
+                max_length = 200  # Maksimum el uzunluğu
+                min_length = 20   # Minimum el uzunluğu
+                new_volume = np.interp(length, [min_length, max_length], [0.0, 1.0])
+                current_volume = (1 - 0.2) * current_volume + 0.2 * new_volume
+
+                # El yukarı kaldırıldığında sesi yükselt
+                if landmarks[8].y < landmarks[4].y:
+                    current_volume = min(current_volume + 0.1, 1.0)
+
+                # El aşağı indirildiğinde sesi azalt
+                if landmarks[8].y > landmarks[4].y:
+                    current_volume = max(current_volume - 0.1, 0.0)
+
+                # Ses seviyesini ayarlama
+                volume.SetMasterVolumeLevelScalar(current_volume, None)
+
+    cv2.imshow("Hand Tracking", img)
+    
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
+
+
+
+
+
+
+
